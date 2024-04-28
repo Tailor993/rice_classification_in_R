@@ -5,30 +5,16 @@
 # Preconfig for Program Analysis -----------------------------------------------------
 
 # for run time measurement
-timeColumns = c("start_program","stop_program","start_fileReadAndPrepProcess","stop_fileReadAndPrepProcess", "start_usefulBasicCalc", "stop_usefulBasicCalc", "start_VisualAnalisys", "stop_VisualAnalisys", "start_ZTests", "stop_ZTests") 
+timeColumns = c("start_program","stop_program","start_fileReadAndPrepProcess","stop_fileReadAndPrepProcess","start_diagramCreation","stop_diagramCreation", "start_linearRegression1", "stop_linearRegression1", "start_linearRegression2", "stop_linearRegression2","start_logosticalRegression1","stop_logosticalRegression1","start_logosticalRegression2","stop_logosticalRegression2") 
 time = data.frame(matrix(nrow = 1, ncol = length(timeColumns))) 
 colnames(time) = timeColumns
 time$start_program <- Sys.time()
 
 
-
-# Identify the current working directory if I don't know why I can not laod the data
-getwd()
-
 # Dependency loading ----
 library("GGally") # ggpairs()
 library("jtools") # effect_plot()
 library("rgl")    # oped3D()
-library("stringr") # for later string operations
-#installed.packages("partykit")
-library("grid")
-library("libcoin")
-library("mvtnorm")
-library("partykit")
-#install.packages("caret",
-#                 repos = "http://cran.r-project.org", 
-#                 dependencies = c("Depends", "Imports", "Suggests"))
-library("caret")
 
 # File Read And PreProcessing ---------------------------------------------------------
 
@@ -37,256 +23,177 @@ time$start_fileReadAndPrepProcess <- Sys.time()
 #   - Header is TRUE since the first line hase the column names
 #   - Sep is , since the file was too big to deal with character changing in Notpad++ and R can handle this with right configuration
 #   - Dec is . becouse the source file is related to a country where they use , as a decimal separetor
-riceData <- read.csv("Rice_Cammeo_Osmancik.csv", header=TRUE, sep = ",", dec=".")
+riceData <- read.csv("Rice_Cammeo_Osmancik.csv",  header=TRUE, sep = ",", dec=".")
+
+# Cratinga unique ID 
+riceData$ID <- c(1:nrow(riceData))
 
 # Create a numeric class to be more comperable
-# - 1 means CAMMEO rice
-# - 2 means OSMANCIK rice
-for (i in 1:length(riceData$Class)) {
-  riceData$ClassId[i] <- 0
-  riceData$ClassLetter[i] <- "N"
-  if( riceData$Class[i] == "Osmancik" ){
-    riceData$ClassId[i] <- 2
-    riceData$ClassLetter[i] <- "O"
-  }
-  if( riceData$Class[i] == "Cammeo" ){
-    riceData$ClassId[i] <- 1
-    riceData$ClassLetter[i] <- "C"
-  }
-}
+# - 0 means CAMMEO rice
+# - 1 means OSMANCIK rice
+riceData$isCammeo <- ifelse(riceData$Class == "Cammeo", 1, 0)
 
-# Create a list of dataframes
-# Every element in this list represent a different type of rice
-# In every riceType dataframe you will find the related propőerties
-riceDataByCategory <- riceData
-riceDataByCategory<-split(riceDataByCategory, riceDataByCategory$Class)
+# Change order of the columns. Usally ID is first and the expected result is bettter as the last ones.
+riceData <- riceData[, c(9,1,2,3,4,5,6,7,8,10)]
 
 time$stop_fileReadAndPrepProcess <- Sys.time()
 print("File Read and PreProcessing time: " )
 time$stop_fileReadAndPrepProcess - time$start_fileReadAndPrepProcess 
 
 
-# Calculation of useful basic data ---------------------------------------
-time$start_usefulBasicCalc<- Sys.time()
+# Create diagrams if needed ---------------------------------------------------
+createDiagram <- TRUE
+if(createDiagram) {
+  time$start_diagramCreation <- Sys.time()
+  ricePAirsPlot <- ggpairs(data=riceData, columns=c(2:8,10), title="Rice Diagram Matrix")
+  ggsave(filename="riceDiagramMatrix.png", 
+         plot=ricePAirsPlot, device="png", 
+         path=getwd(), 
+         height=500, 
+         width=500, 
+         units="mm", 
+         dpi=500)
+  time$stop_diagramCreation <- Sys.time()
+  print("Diagram creation: " )
+  time$stop_diagramCreation - time$start_diagramCreation 
+  
+}
 
-# Setup dataframe for rice types to store the related calculated values together
-# pcs - pieces - darab
-# avg - avarage - atlag
-# SD - standard deviation - szoras
-# SE - standard error - standard hiba
-columns = c("pcs",
-            "areaSum",           "areaAvg",           "areaSD",           "areaSE", 
-            "perimeterSum",      "perimeterAvg",      "perimeterSD",      "perimeterSE", 
-            "majorAxisLengthSum","majorAxisLengthAvg","majorAxisLengthSD","majorAxisLengthSE",
-            "minorAxisLengthSum","minorAxisLengthAvg","minorAxisLengthSD","minorAxisLengthSE",
-            "eccentricitySum",   "eccentricityAvg",   "eccentricitySD",   "eccentricitySE",
-            "convexAreaSum",     "convexAreaAvg",     "convexAreaSD",     "convexAreaSE",
-            "extentSum",         "extentAvg",         "extentSD",         "extentSE"
-) 
-CammeoCalc = data.frame(matrix(nrow = 1, ncol = length(columns))) 
-colnames(CammeoCalc) = columns
-OsmanCalc = data.frame(matrix(nrow = 1, ncol = length(columns))) 
-colnames(OsmanCalc) = columns
+# Standard Models creation ---------------------------------------------------
+riceModelV1 <- isCammeo ~ Area + Perimeter + Major_Axis_Length + Minor_Axis_Length + Eccentricity + Convex_Area + Extent
+riceModelV2 <- isCammeo ~ Area * Perimeter * Major_Axis_Length * Minor_Axis_Length * Eccentricity * Convex_Area * Extent
 
-CammeoCalc$pcs <- length( riceDataByCategory$Cammeo$Area )
+# Calculate Linear Regression Model 1 | Run: 0.02542591 -----------------------
+time$start_linearRegression1 <- Sys.time()
 
-CammeoCalc$areaSum <- sum( riceDataByCategory$Cammeo$Area )
-CammeoCalc$areaAvg <- CammeoCalc$areaSum / CammeoCalc$pcs
-CammeoCalc$areaSD <- sd( riceDataByCategory$Cammeo$Area )
-CammeoCalc$areaSE <- CammeoCalc$areaSD / ( sqrt( CammeoCalc$pcs )  )
+riceLinearModellV1 <- lm(riceModelV1, data = riceData)
+summary(riceLinearModellV1)
+# Cammeo test | Result: 0.8882125
+predict(riceLinearModellV1, 
+        data.frame(Area = 14656,
+                   Perimeter = 494.311,
+                   Major_Axis_Length = 206.0201,
+                   Minor_Axis_Length = 91.73097,
+                   Eccentricity = 0.8954050,
+                   Convex_Area = 15072,
+                   Extent = 0.6154363)
+)
+# Osmanik test | Result: 0.06330175
+predict(riceLinearModellV1, 
+        data.frame(Area = 11486,
+                   Perimeter = 420.8529968261719,
+                   Major_Axis_Length = 175.25750732421875,
+                   Minor_Axis_Length = 83.86408233642578,
+                   Eccentricity = 0.8780770897865295,
+                   Convex_Area = 11615,
+                   Extent = 0.7765008211135864)
+)
 
-CammeoCalc$perimeterSum <- sum( riceDataByCategory$Cammeo$Perimeter )
-CammeoCalc$perimeterAvg <- CammeoCalc$perimeterSum / CammeoCalc$pcs
-CammeoCalc$perimeterSD <- sd( riceDataByCategory$Cammeo$Perimeter )
-CammeoCalc$perimeterSE <- CammeoCalc$perimeterSD / ( sqrt( CammeoCalc$pcs )  )
+time$stop_linearRegression1 <- Sys.time()
+print("Linear regression Model 1 : " )
+time$stop_linearRegression1 - time$start_linearRegression1
 
-CammeoCalc$majorAxisLengthSum <- sum( riceDataByCategory$Cammeo$Major_Axis_Length )
-CammeoCalc$majorAxisLengthAvg <- CammeoCalc$majorAxisLengthSum / CammeoCalc$pcs
-CammeoCalc$majorAxisLengthSD <- sd( riceDataByCategory$Cammeo$Major_Axis_Length )
-CammeoCalc$majorAxisLengthSE <- CammeoCalc$majorAxisLengthSD / ( sqrt( CammeoCalc$pcs )  )
-
-CammeoCalc$minorAxisLengthSum <- sum( riceDataByCategory$Cammeo$Minor_Axis_Length )
-CammeoCalc$minorAxisLengthAvg <- CammeoCalc$minorAxisLengthSum / CammeoCalc$pcs
-CammeoCalc$minorAxisLengthSD <- sd( riceDataByCategory$Cammeo$Minor_Axis_Length )
-CammeoCalc$minorAxisLengthSE <- CammeoCalc$minorAxisLengthSD / ( sqrt( CammeoCalc$pcs )  )
-
-CammeoCalc$eccentricitySum <- sum( riceDataByCategory$Cammeo$Eccentricity )
-CammeoCalc$eccentricityAvg <- CammeoCalc$eccentricitySum / CammeoCalc$pcs
-CammeoCalc$eccentricitySD <- sd( riceDataByCategory$Cammeo$Eccentricity )
-CammeoCalc$eccentricitySE <- CammeoCalc$eccentricitySD / ( sqrt( CammeoCalc$pcs )  )
-
-CammeoCalc$convexAreaSum <- sum( riceDataByCategory$Cammeo$Convex_Area )
-CammeoCalc$convexAreaAvg <- CammeoCalc$convexAreaSum / CammeoCalc$pcs
-CammeoCalc$convexAreaSD <- sd( riceDataByCategory$Cammeo$Convex_Area )
-CammeoCalc$convexAreaSE <- CammeoCalc$convexAreaSD / ( sqrt( CammeoCalc$pcs )  )
-
-CammeoCalc$extentSum <- sum( riceDataByCategory$Cammeo$Extent )
-CammeoCalc$extentAvg <- CammeoCalc$extentSum / CammeoCalc$pcs
-CammeoCalc$extentSD <- sd( riceDataByCategory$Cammeo$Extent )
-CammeoCalc$extentSE <- CammeoCalc$extentSD / ( sqrt( CammeoCalc$pcs )  )
-
-OsmanCalc$pcs <- length( riceDataByCategory$Osmancik$Area )
-
-OsmanCalc$areaSum <- sum( riceDataByCategory$Osmancik$Area )
-OsmanCalc$areaAvg <- OsmanCalc$areaSum / OsmanCalc$pcs
-OsmanCalc$areaSD <- sd( riceDataByCategory$Osmancik$Area )
-OsmanCalc$areaSE <- OsmanCalc$areaSD / ( sqrt( OsmanCalc$pcs )  )
-
-OsmanCalc$perimeterSum <- sum( riceDataByCategory$Osmancik$Perimeter )
-OsmanCalc$perimeterAvg <- OsmanCalc$perimeterSum / OsmanCalc$pcs
-OsmanCalc$perimeterSD <- sd( riceDataByCategory$Osmancik$Perimeter )
-OsmanCalc$perimeterSE <- OsmanCalc$perimeterSD / ( sqrt( OsmanCalc$pcs )  )
-
-OsmanCalc$majorAxisLengthSum <- sum( riceDataByCategory$Osmancik$Major_Axis_Length )
-OsmanCalc$majorAxisLengthAvg <- OsmanCalc$majorAxisLengthSum / OsmanCalc$pcs
-OsmanCalc$majorAxisLengthSD <- sd( riceDataByCategory$Osmancik$Major_Axis_Length )
-OsmanCalc$majorAxisLengthSE <- OsmanCalc$majorAxisLengthSD / ( sqrt( OsmanCalc$pcs )  )
-
-OsmanCalc$minorAxisLengthSum <- sum( riceDataByCategory$Osmancik$Minor_Axis_Length )
-OsmanCalc$minorAxisLengthAvg <- OsmanCalc$minorAxisLengthSum / OsmanCalc$pcs
-OsmanCalc$minorAxisLengthSD <- sd( riceDataByCategory$Osmancik$Minor_Axis_Length )
-OsmanCalc$minorAxisLengthSE <- OsmanCalc$minorAxisLengthSD / ( sqrt( OsmanCalc$pcs )  )
-
-OsmanCalc$eccentricitySum <- sum( riceDataByCategory$Osmancik$Eccentricity )
-OsmanCalc$eccentricityAvg <- OsmanCalc$eccentricitySum / OsmanCalc$pcs
-OsmanCalc$eccentricitySD <- sd( riceDataByCategory$Osmancik$Eccentricity )
-OsmanCalc$eccentricitySE <- OsmanCalc$eccentricitySD / ( sqrt( OsmanCalc$pcs )  )
-
-OsmanCalc$convexAreaSum <- sum( riceDataByCategory$Osmancik$Convex_Area )
-OsmanCalc$convexAreaAvg <- OsmanCalc$convexAreaSum / OsmanCalc$pcs
-OsmanCalc$convexAreaSD <- sd( riceDataByCategory$Osmancik$Convex_Area )
-OsmanCalc$convexAreaSE <- OsmanCalc$convexAreaSD / ( sqrt( OsmanCalc$pcs )  )
-
-OsmanCalc$extentSum <- sum( riceDataByCategory$Osmancik$Extent )
-OsmanCalc$extentAvg <- OsmanCalc$extentSum / OsmanCalc$pcs
-OsmanCalc$extentSD <- sd( riceDataByCategory$Osmancik$Extent )
-OsmanCalc$extentSE <- OsmanCalc$extentSD / ( sqrt( OsmanCalc$pcs )  )
+# Calculate Linear Regression Model 2 | Run: 0.115773s  ---------------------
+time$start_linearRegression2 <- Sys.time()
+riceLinearModellV2 <- lm(riceModelV2, data = riceData)
+summary(riceLinearModellV2)
+# Cammeo test | Result: 1.051158
+predict(riceLinearModellV2, 
+        data.frame(Area = 14656,
+                   Perimeter = 494.311,
+                   Major_Axis_Length = 206.0201,
+                   Minor_Axis_Length = 91.73097,
+                   Eccentricity = 0.8954050,
+                   Convex_Area = 15072,
+                   Extent = 0.6154363),
+        type = "response"
+)
+# Osmanik test | Result: -0.04021758
+predict(riceLinearModellV2, 
+        data.frame(Area = 11486,
+                   Perimeter = 420.8529968261719,
+                   Major_Axis_Length = 175.25750732421875,
+                   Minor_Axis_Length = 83.86408233642578,
+                   Eccentricity = 0.8780770897865295,
+                   Convex_Area = 11615,
+                   Extent = 0.7765008211135864),
+        type = "response"
+)
 
 
+time$stop_linearRegression2 <- Sys.time()
+print("Linear regression Model 2  : " )
+time$stop_linearRegression2 - time$start_linearRegression2
 
-time$stop_usefulBasicCalc <- Sys.time()
-print("Calculation of useful basic data  time: " )
-time$stop_usefulBasicCalc - time$start_usefulBasicCalc 
-
-
-
-# Visual analisys ---------------------------------------------------------
-time$start_VisualAnalisys <- Sys.time()
-
-# Draw all parameters to visualize to see relation between properties and classes
-graphics.off()
-# par(mfrow = c(4, 4))
-plot(riceData$Area,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Area" ) # Terület
-abline(v=OsmanCalc$areaAvg, col="red")
-abline(v=CammeoCalc$areaAvg, col="blue")
-# grid(nx=2, ny=nx)
-plot(riceData$Perimeter,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Perimeter" ) # Kerület
-abline(v=OsmanCalc$perimeterAvg , col="red")
-abline(v=CammeoCalc$perimeterAvg , col="blue")
-plot(riceData$Major_Axis_Length,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Major_Axis_Length" ) # Hosszabb oldal
-plot(riceData$Minor_Axis_Length,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Minor_Axis_Length" ) # Rövidebb oldal
-plot(riceData$Eccentricity,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Eccentricity" ) # Különösség?
-plot(riceData$Convex_Area,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Convex_Area" ) # Konvex terület
-plot(riceData$Extent,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Extent" ) # Terjedelem
-
-plot(riceData$Area*riceData$Major_Axis_Length,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Area * MajorAxiseLength" ) # Terjedelem
-
-plot(riceData$Area*riceData$Major_Axis_Length*riceData$Perimeter,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Area * MajorAxiseLength * Perimeter" ) # Terjedelem
-
-# regression check by eye
-graphics.off()
-par(mfrow = c(2, 2))
-#graphics.off()
-plot(riceData$Area,riceData$Perimeter, col=factor(riceData$ClassId), main = "Area - Permit" ) # Terület - Kerület | LINEAR REGRESSION +
-plot(riceData$Area,riceData$Major_Axis_Length, col=factor(riceData$ClassId), main = "Area - MAjor Axis Length" ) # Terület - Hosszab oldal | LINEAR REGRESSION +
-plot(riceData$Area,riceData$Minor_Axis_Length, col=factor(riceData$ClassId), main = "Area - Minor Axis Length" ) # Terület - Rövidebb oldal |  REGRESSION +
-plot(riceData$Area,riceData$Eccentricity, col=factor(riceData$ClassId), main = "Area - Eccentricity" ) # Terület -Különösség | NO 
-plot(riceData$Area,riceData$Convex_Area, col=factor(riceData$ClassId), main = "Class by Area" ) # Terület - Terület convexitás | LINEAR REGRESSION +++ 
-plot(riceData$Area,riceData$Extent, col=factor(riceData$ClassId), main = "Class by Area" ) # Terület -  terjedelem | NO
+# Linear regression Models results --------------------------------------------
+# In runtime the Model 1 runs 78,04% faster and result can acccepted, but Model 2 have more precision.
 
 
-plot(riceData$Perimeter,riceData$Major_Axis_Length, col=factor(riceData$ClassId), main = "Class by Area" ) # Kerület - Hosszab oldal | LINEAR REGRESSION +
-plot(riceData$Perimeter,riceData$Minor_Axis_Length, col=factor(riceData$ClassId), main = "Class by Area" ) # Kerület - Rövidebb oldal | REGRESSION +
-plot(riceData$Perimeter,riceData$Eccentricity, col=factor(riceData$ClassId), main = "Class by Area" ) # Kerület - Különösség | NO 
-plot(riceData$Perimeter,riceData$Convex_Area, col=factor(riceData$ClassId), main = "Class by Area" ) # Kerület - Terület convexitás | LINEAR REGRESSION +++ 
-plot(riceData$Perimeter,riceData$Extent, col=factor(riceData$ClassId), main = "Class by Area" ) # Kerület -  terjedelem | NO
+# Logistic regression model 1 | Result: 0.03988791s ---------------------------
+time$start_logosticalRegression1 <- Sys.time()
+riceLogisticModelV1 <- glm(riceModelV1, 
+                           data = riceData,
+                           family = "binomial")
+summary(riceLogisticModelV1)
+# Cammeo test | Result: 0.9920536
+predict(riceLogisticModelV1,
+        data.frame(Area = 14656,
+                   Perimeter = 494.311,
+                   Major_Axis_Length = 206.0201,
+                   Minor_Axis_Length = 91.73097,
+                   Eccentricity = 0.8954050,
+                   Convex_Area = 15072,
+                   Extent = 0.6154363),
+        type = "response") 
+# Osmanik test | Result: 0.009709109
+predict(riceLogisticModelV1, 
+        data.frame(Area = 11486,
+                   Perimeter = 420.8529968261719,
+                   Major_Axis_Length = 175.25750732421875,
+                   Minor_Axis_Length = 83.86408233642578,
+                   Eccentricity = 0.8780770897865295,
+                   Convex_Area = 11615,
+                   Extent = 0.7765008211135864),
+        type = "response"
+)
+
+time$stop_logosticalRegression1 <- Sys.time()
+print("Linear regression Model 1: " )
+time$stop_logosticalRegression1 - time$start_logosticalRegression1
+
+# Logistic regression model 2 | Result: 1.152181s -----------------------------
+time$start_logosticalRegression2 <- Sys.time()
+
+riceLogisticModelV2 <- glm(riceModelV2, 
+                           data = riceData,
+                           family = "binomial")
+summary(riceLogisticModelV2)
+# Cammeo test | Result: 0.9970724
+predict(riceLogisticModelV2,
+        data.frame(Area = 14656,
+                   Perimeter = 494.311,
+                   Major_Axis_Length = 206.0201,
+                   Minor_Axis_Length = 91.73097,
+                   Eccentricity = 0.8954050,
+                   Convex_Area = 15072,
+                   Extent = 0.6154363),
+        type = "response") 
+# Osmanik test | Result: 0.01930926
+predict(riceLogisticModelV2, 
+        data.frame(Area = 11486,
+                   Perimeter = 420.8529968261719,
+                   Major_Axis_Length = 175.25750732421875,
+                   Minor_Axis_Length = 83.86408233642578,
+                   Eccentricity = 0.8780770897865295,
+                   Convex_Area = 11615,
+                   Extent = 0.7765008211135864),
+        type = "response"
+)
 
 
-plot(riceData$Major_Axis_Length,riceData$Minor_Axis_Length, col=factor(riceData$ClassId), main = "Class by Area" ) # Hosszab oldal - Rövidebb oldal | NO
-plot(riceData$Major_Axis_Length,riceData$Eccentricity, col=factor(riceData$ClassId), main = "Class by Area" ) # Hosszab oldal - Különösség | NO !!!!!
-plot(riceData$Major_Axis_Length,riceData$Convex_Area, col=factor(riceData$ClassId), main = "Class by Area" ) # Hosszab oldal - Terület convexitás | LINEAR REGRESSION +
-plot(riceData$Major_Axis_Length,riceData$Extent, col=factor(riceData$ClassId), main = "Class by Area" ) # Hosszab oldal -  terjedelem | NO
-
-
-plot(riceData$Minor_Axis_Length,riceData$Eccentricity, col=factor(riceData$ClassId), main = "Class by Area" ) # Rövidebb oldal - Különösség | NO 
-plot(riceData$Minor_Axis_Length,riceData$Convex_Area, col=factor(riceData$ClassId), main = "Class by Area" ) # Rövidebb oldal - Terület convexitás | NO
-plot(riceData$Minor_Axis_Length,riceData$Extent, col=factor(riceData$ClassId), main = "Class by Area" ) # Rövidebb oldal -  terjedelem | NO
-
-
-plot(riceData$Eccentricity,riceData$Convex_Area, col=factor(riceData$ClassId), main = "Class by Area" ) # Különösség  - Terület convexitás | NO
-plot(riceData$Eccentricity,riceData$Extent, col=factor(riceData$ClassId), main = "Class by Area" ) # Különösség  -  terjedelem | NO
-
-plot(riceData$Convex_Area,riceData$Extent, col=factor(riceData$ClassId), main = "Class by Area" ) # Terület convexitás  -  terjedelem | NO
-
-# Follow my feelings
-plot(riceData$Perimeter*riceData$Minor_Axis_Length,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Area" ) # Kerület - Rövidebb oldal | REGRESSION +
-
-plot(riceData$Eccentricity*riceData$Convex_Area,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Area" ) # Különösség  - Terület convexitás | NO
-
-
-plot(riceData$Minor_Axis_Length,riceData$Convex_Area, col=factor(riceData$ClassId), main = "Class by Area" ) # Rövidebb oldal - Terület convexitás | NO
-plot(riceData$Minor_Axis_Length*riceData$Convex_Area,riceData$ClassId, col=factor(riceData$ClassId), main = "Class by Area" ) # Rövidebb oldal - Terület convexitás | NO
-
-# Keep Major Axsis, permit| minor axis, major axis 
-graphics.off()
-par(mfrow = c(1, 2))
-plot(riceData$Major_Axis_Length,riceData$Perimeter,col=factor(riceData$ClassId))
-abline(a=1000 ,b=-3 , col="blue")
-
-plot(riceData$Major_Axis_Length,riceData$Minor_Axis_Length,col=factor(riceData$ClassId))
-abline(v=190, col="blue")
-
-
-time$stop_VisualAnalisys <- Sys.time()
-print("Visual analisys time: " )
-time$stop_VisualAnalisys - time$start_VisualAnalisys 
-
-
-# Z Test scripts -----
-time$start_ZTests <- Sys.time()
-
-## HELP: https://www.youtube.com/watch?v=ImbXdYrT59s
-#installed.packages("partykit")
-# library("grid") # Loaded at the top of the file
-# library("libcoin") # Loaded at the top of the file
-# library("mvtnorm") # Loaded at the top of the file
-# library("partykit") # Loaded at the top of the file
-#install.packages("caret",
-#                 repos = "http://cran.r-project.org", 
-#                 dependencies = c("Depends", "Imports", "Suggests"))
-library("caret") # Loaded at the top of the file
-library("partykit")
-set.seed(1234)
-# 2 way separation | data size | replacable the seed | 70% training set and 30% validity set || result 1 for training and 2 for testing
-trainOrTest <- sample(2, nrow(riceData), replace = TRUE, prob=c(0.7,0.3))
-trainingData.data <- riceData[trainOrTest==1,]
-testingData.data <- riceData[trainOrTest==2,]
-
-# Resolvable problem into FORMULA <- Result Column ~ Major_Axis_Length Minor_Axis_Length, Perimeter
-myF <- ClassId ~ Area + Perimeter + Major_Axis_Length + Minor_Axis_Length + Eccentricity + Convex_Area +Extent
-#myF <- ClassLetter ~ Perimeter + Major_Axis_Length + Minor_Axis_Length 
-
-# Conditioning tree FORMULA,
-riceCTree <- ctree(myF, data=trainingData.data)
-# Show accurrency
-table(predict(riceCTree), trainingData.data$Class)
-# Draw decisions 
-plot(riceCTree)
-
-
-time$stop_ZTests <- Sys.time()
-print("Z Tests  time: " )
-time$stop_TTests - time$start_TTests 
+time$stop_logosticalRegression2 <- Sys.time()
+print("Linear regression Model 2: " )
+time$stop_logosticalRegression2 - time$start_logosticalRegression2
 
 # Post code Analisys scripts -------------------------------------
 time$stop_program <- Sys.time();
